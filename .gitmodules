@@ -1,0 +1,15 @@
+[submodule "observer/vendor/Cactus_Whistle-Pure_Rust"]
+	path = observer/vendor/Cactus_Whistle-Pure_Rust
+	url = https://github.com/AlexandrosGiann/Cactus_Whistle-Pure_Rust.git
+[submodule "observer/vendor/MobileCLIP-S0_PureRust"]
+	path = observer/vendor/MobileCLIP-S0_PureRust
+	url = https://github.com/AlexandrosGiann/MobileCLIP-S0_PureRust.git
+[submodule "observer/vendor/SmolLM2_135MInstruct-PureRust"]
+	path = observer/vendor/SmolLM2_135MInstruct-PureRust
+	url = https://github.com/AlexandrosGiann/SmolLM2_135MInstruct-PureRust.git
+[submodule "observer/vendor/paraphrase-multilingual-MiniLM-L12-v2_PureRust"]
+	path = observer/vendor/paraphrase-multilingual-MiniLM-L12-v2_PureRust
+	url = https://github.com/AlexandrosGiann/paraphrase-multilingual-MiniLM-L12-v2_PureRust.git
+[submodule "observer/vendor/needle-rs"]
+	path = observer/vendor/needle-rs
+	url = https://github.com/Geekgineer/needle-rs.git

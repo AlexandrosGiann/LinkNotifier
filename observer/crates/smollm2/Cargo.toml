@@ -1,0 +1,10 @@
+# Library wrapper around vendor/SmolLM2_135MInstruct-PureRust, which ships only a
+# binary. The sources are compiled in place through #[path]; nothing is copied.
+[package]
+name = "smollm2"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"

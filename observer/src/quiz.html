@@ -1,0 +1,305 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #5d6675; --line: #dfe3ea;
+  --accent: #4c5bd4; --ok: #1d7a46; --ok-bg: #e5f4ea; --bad: #b3261e; --bad-bg: #fbe9e7;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161b; --card: #1d2027; --text: #e7e9ee; --muted: #9aa2b1; --line: #2e333d;
+    --accent: #8d98ff; --ok: #6fd39a; --ok-bg: #1b3326; --bad: #ff8a80; --bad-bg: #3a1f1d;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 "Segoe UI", system-ui, sans-serif; }
+main { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 14px; margin-bottom: 20px; }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-bottom: 20px; }
+.bar > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+.tag { display: inline-block; font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px; margin-bottom: 10px; }
+.prompt { white-space: pre-line; font-size: 17px; margin-bottom: 16px; }
+.opt { display: block; width: 100%; text-align: left; font: inherit; color: inherit; background: transparent;
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin: 8px 0; cursor: pointer; }
+.opt:hover:not(:disabled) { border-color: var(--accent); }
+.opt:disabled { cursor: default; }
+.opt.ok { background: var(--ok-bg); border-color: var(--ok); }
+.opt.bad { background: var(--bad-bg); border-color: var(--bad); }
+.formula { display: flex; gap: 8px; }
+.formula input { flex: 1; min-width: 0; font: 17px/1.4 Consolas, "Cascadia Mono", monospace; color: inherit; background: transparent;
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.formula input.ok { background: var(--ok-bg); border-color: var(--ok); }
+.formula input.bad { background: var(--bad-bg); border-color: var(--bad); }
+.hint { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.explain { margin-top: 14px; font-size: 14px; color: var(--muted); white-space: pre-line; }
+.explain a { color: var(--accent); }
+.nav { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+button.main { font: inherit; background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 9px 18px; cursor: pointer; }
+button.alt { font: inherit; background: transparent; color: var(--accent); border: 1px solid var(--accent); border-radius: 8px; padding: 9px 18px; cursor: pointer; }
+.score { font-size: 40px; font-weight: 600; margin: 4px 0; }
+.review li { margin: 6px 0; }
+.review .x { color: var(--bad); } .review .v { color: var(--ok); }
+.sources a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title"></h1>
+  <div class="sub" id="sub"></div>
+  <div class="bar"><div id="bar"></div></div>
+  <div id="view"></div>
+</main>
+<script>
+const QUIZ = /*QUIZ_DATA*/null;
+const KEY = "observer-quiz-" + QUIZ.id;
+const TEXTS = {
+  en: {
+    session: "session", source: "source", next: "Next", result: "Result", right: "Correct. ", wrong: "Wrong. ",
+    more: "Read more", check: "Check", answer: "Answer: ", again: "Only the mistakes again", restart: "Start over",
+    reading: "Further reading:", score: "Score", best: " · best: ",
+    sub: (n, s) => n + " questions from the session" + (s ? " and " + s + " sources" : ""),
+    empty: "Not enough material for questions in this session.",
+    hint: "Use x, e or exp(), ln(), ^, *, /, max(a, b). Any equivalent form counts.",
+    unreadable: "Could not read that expression. ",
+    forbid: "Write it out without: ",
+    example: "e.g. 3x^2 + 2/(x + 1)",
+  },
+  el: {
+    session: "συνάντηση", source: "πηγή", next: "Επόμενη", result: "Αποτέλεσμα", right: "Σωστά. ", wrong: "Λάθος. ",
+    more: "Διάβασε περισσότερα", check: "Έλεγχος", answer: "Απάντηση: ", again: "Ξανά μόνο τα λάθη", restart: "Από την αρχή",
+    reading: "Πηγές για διάβασμα:", score: "Αποτέλεσμα", best: " · καλύτερο: ",
+    sub: (n, s) => n + " ερωτήσεις από όσα ειπώθηκαν" + (s ? " και " + s + " πηγές" : ""),
+    empty: "Δεν βρέθηκε αρκετό υλικό για ερωτήσεις σε αυτή τη συνάντηση.",
+    hint: "Χρησιμοποίησε x, e ή exp(), ln(), ^, *, /, max(a, b). Κάθε ισοδύναμη μορφή μετράει.",
+    unreadable: "Δεν μπόρεσα να διαβάσω την έκφραση. ",
+    forbid: "Γράψ' την χωρίς: ",
+    example: "π.χ. 3x^2 + 2/(x + 1)",
+  },
+};
+const T = TEXTS[QUIZ.lang] || TEXTS.en;
+document.documentElement.lang = QUIZ.lang;
+
+// ---------------------------------------------------------------- expressions
+// A small parser for typed formulas: numbers, x, e, pi, + - * / ^, implicit
+// multiplication, and the functions below. A typed answer is right when it
+// gives the same values as the reference at a set of points.
+const FUNCS = {
+  exp: Math.exp, ln: Math.log, log: Math.log, sqrt: Math.sqrt, abs: Math.abs, tanh: Math.tanh,
+  sinh: Math.sinh, cosh: Math.cosh, sin: Math.sin, cos: Math.cos, max: Math.max, min: Math.min,
+  sigmoid: x => 1 / (1 + Math.exp(-x)), sigma: x => 1 / (1 + Math.exp(-x)), "σ": x => 1 / (1 + Math.exp(-x)),
+};
+
+function tokenize(src) {
+  const s = src.replace(/\|([^|]+)\|/g, "abs($1)").replace(/[−–]/g, "-").replace(/[×·⋅]/g, "*").replace(/÷/g, "/").replace(/\*\*/g, "^").replace(/π/g, "pi");
+  const out = [];
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (/\s/.test(c)) { i++; continue; }
+    const num = /^(\d+\.?\d*|\.\d+)/.exec(s.slice(i));
+    if (num) { out.push({ t: "num", v: parseFloat(num[1]) }); i += num[1].length; continue; }
+    const id = /^([a-zA-Zσ]+)/.exec(s.slice(i));
+    if (id) { out.push({ t: "id", v: id[1].toLowerCase() === "σ" ? "σ" : id[1].toLowerCase() }); i += id[1].length; continue; }
+    if ("+-*/^(),".includes(c)) { out.push({ t: c }); i++; continue; }
+    if ("[{".includes(c)) { out.push({ t: "(" }); i++; continue; }
+    if ("]}".includes(c)) { out.push({ t: ")" }); i++; continue; }
+    throw new Error("unexpected " + c);
+  }
+  return out;
+}
+
+function parse(src) {
+  // Only the right-hand side: "σ(x) = 1/(1+e^-x)" -> "1/(1+e^-x)".
+  const rhs = src.includes("=") ? src.slice(src.lastIndexOf("=") + 1) : src;
+  const tk = tokenize(rhs);
+  let p = 0;
+  const peek = () => tk[p], take = () => tk[p++];
+  const expect = t => { if (!tk[p] || tk[p].t !== t) throw new Error("expected " + t); p++; };
+  const startsFactor = k => k && (k.t === "num" || k.t === "id" || k.t === "(");
+  function expr() {
+    let n = term();
+    while (peek() && (peek().t === "+" || peek().t === "-")) {
+      const op = take().t, a = n, b = term();
+      n = op === "+" ? v => a(v) + b(v) : v => a(v) - b(v);
+    }
+    return n;
+  }
+  function term() {
+    let n = unary();
+    while (peek() && (peek().t === "*" || peek().t === "/" || startsFactor(peek()))) {
+      const op = (peek().t === "*" || peek().t === "/") ? take().t : "*";
+      const a = n, b = unary();
+      n = op === "*" ? v => a(v) * b(v) : v => a(v) / b(v);
+    }
+    return n;
+  }
+  function unary() {
+    if (peek() && peek().t === "-") { take(); const a = unary(); return v => -a(v); }
+    if (peek() && peek().t === "+") { take(); return unary(); }
+    return power();
+  }
+  function power() {
+    const base = atom();
+    if (peek() && peek().t === "^") { take(); const e = unary(); return v => Math.pow(base(v), e(v)); }
+    return base;
+  }
+  function atom() {
+    const k = take();
+    if (!k) throw new Error("unexpected end");
+    if (k.t === "num") return () => k.v;
+    if (k.t === "(") { const n = expr(); expect(")"); return n; }
+    if (k.t === "id") {
+      if (FUNCS[k.v] && peek() && peek().t === "(") {
+        take();
+        const args = [expr()];
+        while (peek() && peek().t === ",") { take(); args.push(expr()); }
+        expect(")");
+        const f = FUNCS[k.v];
+        return v => f(...args.map(a => a(v)));
+      }
+      if (k.v === "e") return () => Math.E;
+      if (k.v === "pi") return () => Math.PI;
+      if (k.v.length === 1) return v => v;  // the variable, whatever its letter
+      throw new Error("unknown " + k.v);
+    }
+    throw new Error("unexpected " + k.t);
+  }
+  const n = expr();
+  if (p < tk.length) throw new Error("unexpected " + tk[p].t);
+  return n;
+}
+
+function sameFunction(typed, reference) {
+  const f = parse(typed), g = parse(reference);
+  return [-3, -1.7, -0.6, -0.1, 0.25, 0.9, 1.6, 2.8].every(x => {
+    const a = f(x), b = g(x);
+    return Number.isFinite(a) && Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b));
+  });
+}
+
+// ---------------------------------------------------------------- page
+let order = QUIZ.questions.map((_, i) => i);
+let pos = 0, picked = {};
+
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  Object.entries(attrs || {}).forEach(([k, v]) => k === "class" ? e.className = v : e.setAttribute(k, v));
+  kids.forEach(k => e.append(k));
+  return e;
+}
+
+const correct = i => picked[i] === true || picked[i] === QUIZ.questions[i].answer && QUIZ.questions[i].kind !== "input";
+
+function remember() {
+  try {
+    const right = QUIZ.questions.filter((_, i) => correct(i)).length;
+    const best = JSON.parse(localStorage.getItem(KEY) || "{}");
+    if (!best.score || right > best.score) localStorage.setItem(KEY, JSON.stringify({ score: right, of: QUIZ.questions.length, at: Date.now() }));
+  } catch (e) {}
+}
+
+function showExplain(box, ok, q) {
+  box.replaceChildren((ok ? T.right : T.wrong) + (q.kind === "input" ? T.answer : "") + q.explain);
+  if (q.url) { box.append(" "); box.append(el("a", { href: q.url, target: "_blank", rel: "noopener" }, T.more)); }
+}
+
+function showQuestion() {
+  const i = order[pos], q = QUIZ.questions[i];
+  document.getElementById("bar").style.width = (100 * pos / order.length) + "%";
+  const view = document.getElementById("view");
+  view.replaceChildren();
+  const card = el("div", { class: "card" },
+    el("span", { class: "tag" }, (pos + 1) + " / " + order.length + " · " + (q.origin === "source" ? T.source : T.session)),
+    el("div", { class: "prompt" }, q.prompt));
+  const explain = el("div", { class: "explain" });
+  const next = el("button", { class: "main" }, pos + 1 < order.length ? T.next : T.result);
+  next.style.visibility = "hidden";
+  next.onclick = () => { pos++; pos < order.length ? showQuestion() : showResult(); };
+  const done = () => { next.style.visibility = "visible"; setTimeout(() => next.focus(), 0); };
+
+  if (q.kind === "input") {
+    const input = el("input", { type: "text", spellcheck: "false", autocomplete: "off", placeholder: T.example });
+    const check = el("button", { class: "main" }, T.check);
+    const submit = () => {
+      if (!input.value.trim()) return;
+      let ok;
+      const typed = input.value.toLowerCase();
+      if ((q.forbid || []).some(f => typed.includes(f))) { explain.replaceChildren(T.forbid + q.forbid.join(", ")); return; }
+      try { ok = sameFunction(input.value, q.expr); }
+      catch (e) { explain.replaceChildren(T.unreadable + e.message); return; }
+      picked[i] = ok;
+      input.disabled = true; check.disabled = true;
+      input.classList.add(ok ? "ok" : "bad");
+      showExplain(explain, ok, q);
+      done();
+    };
+    check.onclick = submit;
+    // preventDefault: the same Enter must not also press "Next", which takes focus.
+    input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); submit(); } };
+    card.append(el("div", { class: "formula" }, input, check), el("div", { class: "hint" }, T.hint));
+    setTimeout(() => input.focus(), 0);
+  } else {
+    const buttons = q.options.map((o, k) => {
+      const b = el("button", { class: "opt" }, o);
+      b.onclick = () => {
+        picked[i] = k;
+        buttons.forEach((x, j) => { x.disabled = true; if (j === q.answer) x.classList.add("ok"); });
+        if (k !== q.answer) b.classList.add("bad");
+        showExplain(explain, k === q.answer, q);
+        done();
+      };
+      card.append(b);
+      return b;
+    });
+  }
+  card.append(explain, el("div", { class: "nav" }, next));
+  view.append(card);
+}
+
+function showResult() {
+  remember();
+  document.getElementById("bar").style.width = "100%";
+  const right = order.filter(correct).length;
+  const wrong = order.filter(i => !correct(i));
+  const list = el("ul", { class: "review" });
+  order.forEach(i => {
+    const q = QUIZ.questions[i], ok = correct(i);
+    const answer = q.kind === "input" ? q.shown : q.options[q.answer];
+    list.append(el("li", {}, el("span", { class: ok ? "v" : "x" }, ok ? "✓ " : "✗ "), q.prompt.split("\n").pop() + " → " + answer));
+  });
+  const card = el("div", { class: "card" }, el("div", {}, T.score), el("div", { class: "score" }, right + " / " + order.length), list);
+  const nav = el("div", { class: "nav" });
+  const all = el("button", { class: "alt" }, T.restart);
+  all.onclick = () => { order = QUIZ.questions.map((_, i) => i); pos = 0; picked = {}; showQuestion(); };
+  nav.append(all);
+  if (wrong.length) {
+    const again = el("button", { class: "main" }, T.again);
+    again.onclick = () => { order = wrong; pos = 0; wrong.forEach(i => delete picked[i]); showQuestion(); };
+    nav.append(again);
+  }
+  card.append(nav);
+  if (QUIZ.sources.length) {
+    const s = el("div", { class: "sources" }, el("p", {}, T.reading));
+    const ul = el("ul");
+    QUIZ.sources.forEach(x => ul.append(el("li", {}, el("a", { href: x.url, target: "_blank", rel: "noopener" }, x.title))));
+    s.append(ul);
+    card.append(s);
+  }
+  document.getElementById("view").replaceChildren(card);
+}
+
+document.getElementById("title").textContent = QUIZ.title;
+let best = "";
+try { const b = JSON.parse(localStorage.getItem(KEY) || "null"); if (b) best = T.best + b.score + "/" + b.of; } catch (e) {}
+document.getElementById("sub").textContent = T.sub(QUIZ.questions.length, QUIZ.sources.length) + best;
+if (QUIZ.questions.length) showQuestion();
+else document.getElementById("view").textContent = T.empty;
+</script>
+</body>
+</html>

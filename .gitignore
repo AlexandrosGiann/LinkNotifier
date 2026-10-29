@@ -1,0 +1,10 @@
+# Build output and downloaded model weights (download_models.ps1)
+observer/target/
+observer/models/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local backups
+*.bak
