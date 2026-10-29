@@ -65,7 +65,7 @@ const TEXTS = {
     reading: "Further reading:", score: "Score", best: " · best: ",
     sub: (n, s) => n + " questions from the session" + (s ? " and " + s + " sources" : ""),
     empty: "Not enough material for questions in this session.",
-    hint: "Use x, e or exp(), ln(), ^, *, /, max(a, b). Any equivalent form counts.",
+    hint: "Use the variables in the question, e or exp(), ln(), sqrt(), ^, *, /, max(a, b). Any equivalent form counts.",
     unreadable: "Could not read that expression. ",
     forbid: "Write it out without: ",
     example: "e.g. 3x^2 + 2/(x + 1)",
@@ -76,7 +76,7 @@ const TEXTS = {
     reading: "Πηγές για διάβασμα:", score: "Αποτέλεσμα", best: " · καλύτερο: ",
     sub: (n, s) => n + " ερωτήσεις από όσα ειπώθηκαν" + (s ? " και " + s + " πηγές" : ""),
     empty: "Δεν βρέθηκε αρκετό υλικό για ερωτήσεις σε αυτή τη συνάντηση.",
-    hint: "Χρησιμοποίησε x, e ή exp(), ln(), ^, *, /, max(a, b). Κάθε ισοδύναμη μορφή μετράει.",
+    hint: "Χρησιμοποίησε τις μεταβλητές της ερώτησης, e ή exp(), ln(), sqrt(), ^, *, /, max(a, b). Κάθε ισοδύναμη μορφή μετράει.",
     unreadable: "Δεν μπόρεσα να διαβάσω την έκφραση. ",
     forbid: "Γράψ' την χωρίς: ",
     example: "π.χ. 3x^2 + 2/(x + 1)",
@@ -86,17 +86,24 @@ const T = TEXTS[QUIZ.lang] || TEXTS.en;
 document.documentElement.lang = QUIZ.lang;
 
 // ---------------------------------------------------------------- expressions
-// A small parser for typed formulas: numbers, x, e, pi, + - * / ^, implicit
-// multiplication, and the functions below. A typed answer is right when it
-// gives the same values as the reference at a set of points.
+// A small parser for typed formulas: numbers, the question's variables,
+// e, pi, + - * / ^, implicit multiplication ("2x", "mv^2", "mgh") and the
+// functions below. A typed answer is right when it gives the same values as
+// the reference at a set of points.
 const FUNCS = {
-  exp: Math.exp, ln: Math.log, log: Math.log, sqrt: Math.sqrt, abs: Math.abs, tanh: Math.tanh,
-  sinh: Math.sinh, cosh: Math.cosh, sin: Math.sin, cos: Math.cos, max: Math.max, min: Math.min,
+  exp: Math.exp, ln: Math.log, log: Math.log, log10: Math.log10, lg: Math.log10, sqrt: Math.sqrt,
+  abs: Math.abs, tanh: Math.tanh, sinh: Math.sinh, cosh: Math.cosh, sin: Math.sin, cos: Math.cos,
+  tan: Math.tan, max: Math.max, min: Math.min,
   sigmoid: x => 1 / (1 + Math.exp(-x)), sigma: x => 1 / (1 + Math.exp(-x)), "σ": x => 1 / (1 + Math.exp(-x)),
 };
+const CONSTS = { e: Math.E, pi: Math.PI };
 
 function tokenize(src) {
-  const s = src.replace(/\|([^|]+)\|/g, "abs($1)").replace(/[−–]/g, "-").replace(/[×·⋅]/g, "*").replace(/÷/g, "/").replace(/\*\*/g, "^").replace(/π/g, "pi");
+  const s = src
+    .replace(/\|([^|]+)\|/g, "abs($1)")
+    .replace(/[−–]/g, "-").replace(/[×·⋅]/g, "*").replace(/÷/g, "/").replace(/\*\*/g, "^")
+    .replace(/π/g, "pi").replace(/½/g, "(1/2)").replace(/²/g, "^2").replace(/³/g, "^3")
+    .replace(/√/g, " sqrt ").replace(/₁₀/g, "10").replace(/₀/g, "0");
   const out = [];
   let i = 0;
   while (i < s.length) {
@@ -104,8 +111,8 @@ function tokenize(src) {
     if (/\s/.test(c)) { i++; continue; }
     const num = /^(\d+\.?\d*|\.\d+)/.exec(s.slice(i));
     if (num) { out.push({ t: "num", v: parseFloat(num[1]) }); i += num[1].length; continue; }
-    const id = /^([a-zA-Zσ]+)/.exec(s.slice(i));
-    if (id) { out.push({ t: "id", v: id[1].toLowerCase() === "σ" ? "σ" : id[1].toLowerCase() }); i += id[1].length; continue; }
+    const id = /^([a-zA-Zα-ωΑ-Ω]+\d*)/.exec(s.slice(i));
+    if (id) { out.push({ t: "id", v: id[1] }); i += id[1].length; continue; }
     if ("+-*/^(),".includes(c)) { out.push({ t: c }); i++; continue; }
     if ("[{".includes(c)) { out.push({ t: "(" }); i++; continue; }
     if ("]}".includes(c)) { out.push({ t: ")" }); i++; continue; }
@@ -114,14 +121,37 @@ function tokenize(src) {
   return out;
 }
 
-function parse(src) {
+/// "mgh" -> ["m", "g", "h"] when every piece is a variable or a constant.
+function splitNames(word, names) {
+  const known = names.concat(Object.keys(CONSTS)).sort((a, b) => b.length - a.length);
+  const out = [];
+  let rest = word;
+  while (rest) {
+    const hit = known.find(n => rest.startsWith(n));
+    if (!hit) return null;
+    out.push(hit);
+    rest = rest.slice(hit.length);
+  }
+  return out;
+}
+
+function parse(src, vars) {
+  const names = vars.map(v => v.toLowerCase());
   // Only the right-hand side: "σ(x) = 1/(1+e^-x)" -> "1/(1+e^-x)".
   const rhs = src.includes("=") ? src.slice(src.lastIndexOf("=") + 1) : src;
-  const tk = tokenize(rhs);
+  // "mv" is m times v, so that in "mv^2" only v is squared.
+  const tk = tokenize(rhs).flatMap(k => {
+    if (k.t !== "id") return [k];
+    const low = k.v.toLowerCase();
+    if (names.includes(low) || FUNCS[low] || CONSTS[low] !== undefined) return [k];
+    const parts = splitNames(low, names);
+    return parts ? parts.map(v => ({ t: "id", v })) : [k];
+  });
   let p = 0;
   const peek = () => tk[p], take = () => tk[p++];
   const expect = t => { if (!tk[p] || tk[p].t !== t) throw new Error("expected " + t); p++; };
   const startsFactor = k => k && (k.t === "num" || k.t === "id" || k.t === "(");
+  const name = n => names.includes(n) ? env => env[n] : () => CONSTS[n];
   function expr() {
     let n = term();
     while (peek() && (peek().t === "+" || peek().t === "-")) {
@@ -149,38 +179,57 @@ function parse(src) {
     if (peek() && peek().t === "^") { take(); const e = unary(); return v => Math.pow(base(v), e(v)); }
     return base;
   }
+  function call(f) {
+    if (peek() && peek().t === "(") {
+      take();
+      const args = [expr()];
+      while (peek() && peek().t === ",") { take(); args.push(expr()); }
+      expect(")");
+      return v => f(...args.map(a => a(v)));
+    }
+    const arg = power();  // "sqrt x", "ln 2"
+    return v => f(arg(v));
+  }
   function atom() {
     const k = take();
     if (!k) throw new Error("unexpected end");
     if (k.t === "num") return () => k.v;
     if (k.t === "(") { const n = expr(); expect(")"); return n; }
-    if (k.t === "id") {
-      if (FUNCS[k.v] && peek() && peek().t === "(") {
-        take();
-        const args = [expr()];
-        while (peek() && peek().t === ",") { take(); args.push(expr()); }
-        expect(")");
-        const f = FUNCS[k.v];
-        return v => f(...args.map(a => a(v)));
-      }
-      if (k.v === "e") return () => Math.E;
-      if (k.v === "pi") return () => Math.PI;
-      if (k.v.length === 1) return v => v;  // the variable, whatever its letter
-      throw new Error("unknown " + k.v);
-    }
-    throw new Error("unexpected " + k.t);
+    if (k.t !== "id") throw new Error("unexpected " + k.t);
+    const low = k.v.toLowerCase();
+    const isCall = peek() && peek().t === "(";
+    if (names.includes(low) && !(FUNCS[low] && isCall)) return name(low);
+    if (FUNCS[low]) return call(FUNCS[low]);
+    if (CONSTS[low] !== undefined) return name(low);
+    // One variable: any single letter stands for it ("1/(1+e^-z)").
+    if (names.length === 1 && low.length === 1) return env => env[names[0]];
+    throw new Error("unknown " + k.v);
   }
   const n = expr();
   if (p < tk.length) throw new Error("unexpected " + tk[p].t);
   return n;
 }
 
-function sameFunction(typed, reference) {
-  const f = parse(typed), g = parse(reference);
-  return [-3, -1.7, -0.6, -0.1, 0.25, 0.9, 1.6, 2.8].every(x => {
-    const a = f(x), b = g(x);
-    return Number.isFinite(a) && Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b));
-  });
+const SIGNED = [-3, -1.7, -0.6, -0.1, 0.25, 0.9, 1.6, 2.8];
+const POSITIVE = [0.7, 1.3, 2.1, 2.9, 3.7, 4.4, 1.9, 0.45, 1.1, 3.1];
+
+function sameFunction(typed, reference, vars) {
+  vars = vars && vars.length ? vars : ["x"];
+  const names = vars.map(v => v.toLowerCase());
+  const f = parse(typed, vars), g = parse(reference, vars);
+  let checked = 0;
+  for (let k = 0; k < 8; k++) {
+    const env = {};
+    names.forEach((n, j) => {
+      env[n] = names.length === 1 && n === "x" ? SIGNED[k] : POSITIVE[(k * 3 + j * 7) % POSITIVE.length] + j * 0.11;
+    });
+    const b = g(env);
+    if (!Number.isFinite(b)) continue;
+    const a = f(env);
+    if (!Number.isFinite(a) || Math.abs(a - b) > 1e-6 * Math.max(1, Math.abs(b))) return false;
+    checked++;
+  }
+  return checked >= 4;
 }
 
 // ---------------------------------------------------------------- page
@@ -231,7 +280,7 @@ function showQuestion() {
       let ok;
       const typed = input.value.toLowerCase();
       if ((q.forbid || []).some(f => typed.includes(f))) { explain.replaceChildren(T.forbid + q.forbid.join(", ")); return; }
-      try { ok = sameFunction(input.value, q.expr); }
+      try { ok = sameFunction(input.value, q.expr, q.vars); }
       catch (e) { explain.replaceChildren(T.unreadable + e.message); return; }
       picked[i] = ok;
       input.disabled = true; check.disabled = true;

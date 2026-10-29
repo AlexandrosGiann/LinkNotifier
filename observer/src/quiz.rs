@@ -33,6 +33,9 @@ pub struct Question {
     /// "input": the right answer as shown after answering.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub shown: String,
+    /// "input": the variables of the formula.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vars: Vec<String>,
     /// "input": names that would answer the question by themselves ("tanh").
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub forbid: Vec<String>,
@@ -67,6 +70,7 @@ struct Words {
     what_is: fn(&str, bool) -> String,
     stand_for: fn(&str) -> String,
     equation: fn(&str, &str) -> String,
+    formula: fn(&str, &str, &str) -> String,
     fill: &'static str,
     from_source: fn(&str) -> String,
     said_at: fn(&str) -> String,
@@ -79,6 +83,7 @@ fn words(lang: &str) -> Words {
             what_is: |x, _| format!("Τι είναι το {x};"),
             stand_for: |x| format!("Τι σημαίνει το {x};"),
             equation: |name, f| format!("Γράψε την εξίσωση της συνάρτησης {name}, {f} = ;"),
+            formula: |name, f, vars| format!("Γράψε τον τύπο για {name}: {f} = ; (μεταβλητές: {vars})"),
             fill: "Συμπλήρωσε όπως ειπώθηκε στη συνάντηση:\n",
             from_source: |t| format!("Από τη Wikipedia ({t}):\n"),
             said_at: |t| format!("Ειπώθηκε στο [{t}]:"),
@@ -95,6 +100,7 @@ fn words(lang: &str) -> Words {
             },
             stand_for: |x| format!("What does {x} stand for?"),
             equation: |name, f| format!("Type the equation of the {name} function, {f} = ?"),
+            formula: |name, f, vars| format!("Type the formula for {name}: {f} = ? (variables: {vars})"),
             fill: "Fill in the blank, as it was said in the session:\n",
             from_source: |t| format!("From Wikipedia ({t}):\n"),
             said_at: |t| format!("Said at [{t}]:"),
@@ -115,21 +121,29 @@ fn a_or_an(x: &str) -> &'static str {
     }
 }
 
-/// Functions a lecture on neural networks keeps returning to. The formulas
-/// are fixed here rather than read from a model or a page, and a typed answer
-/// is checked by evaluating it, so any equivalent form counts.
+/// Formulas a lecture keeps coming back to, from machine learning to
+/// physics, chemistry, finance, statistics and biology. They are fixed here
+/// rather than read from a model or a page, and a typed answer is checked by
+/// evaluating it, so any equivalent form counts.
 struct Formula {
     /// Any of these in the transcript or the sources brings the question.
     keys: &'static [&'static str],
-    /// ...but only together with one of these, when not empty.
+    /// ...but only together with one of these, when not empty: "momentum"
+    /// in a meeting about sales is not physics.
     with: &'static [&'static str],
     name: &'static str,
+    name_el: &'static str,
     lhs: &'static str,
     shown: &'static str,
+    /// The reference, in the page's syntax and lower-case variables.
     expr: &'static str,
-    url: &'static str,
+    /// The variables the answer may use, as shown to the user.
+    vars: &'static [&'static str],
+    /// "the equation of the sigmoid function" rather than "the formula for".
+    function: bool,
     /// Typing these would be the answer by name, not the equation.
     forbid: &'static [&'static str],
+    url: &'static str,
 }
 
 const FORMULAS: &[Formula] = &[
@@ -137,61 +151,378 @@ const FORMULAS: &[Formula] = &[
         keys: &["sigmoid", "logistic function"],
         with: &[],
         name: "sigmoid",
+        name_el: "sigmoid",
         lhs: "σ(x)",
         shown: "σ(x) = 1 / (1 + e^(−x))",
         expr: "1/(1+exp(-x))",
-        url: "https://en.wikipedia.org/wiki/Sigmoid_function",
+        vars: &["x"],
+        function: true,
         forbid: &["sigmoid", "sigma", "σ"],
+        url: "https://en.wikipedia.org/wiki/Sigmoid_function",
     },
     Formula {
         keys: &["sigmoid"],
         with: &["derivative", "backpropagation", "back propagation", "gradient"],
         name: "sigmoid derivative",
+        name_el: "παράγωγος της sigmoid",
         lhs: "σ′(x)",
         shown: "σ′(x) = σ(x) · (1 − σ(x))",
         expr: "sigmoid(x)*(1-sigmoid(x))",
-        url: "https://en.wikipedia.org/wiki/Logistic_function#Derivative",
+        vars: &["x"],
+        function: true,
         forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Logistic_function#Derivative",
     },
     Formula {
         keys: &["tanh", "hyperbolic tangent"],
         with: &[],
         name: "tanh",
+        name_el: "tanh",
         lhs: "tanh(x)",
         shown: "tanh(x) = (e^x − e^(−x)) / (e^x + e^(−x))",
         expr: "(exp(x)-exp(-x))/(exp(x)+exp(-x))",
-        url: "https://en.wikipedia.org/wiki/Hyperbolic_functions",
+        vars: &["x"],
+        function: true,
         forbid: &["tanh", "sinh", "cosh"],
+        url: "https://en.wikipedia.org/wiki/Hyperbolic_functions",
     },
     Formula {
         keys: &["relu", "relue", "rectified linear", "rectifier"],
         with: &[],
         name: "ReLU",
+        name_el: "ReLU",
         lhs: "ReLU(x)",
         shown: "ReLU(x) = max(0, x)",
         expr: "max(0,x)",
-        url: "https://en.wikipedia.org/wiki/Rectifier_(neural_networks)",
+        vars: &["x"],
+        function: true,
         forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Rectifier_(neural_networks)",
     },
     Formula {
-        keys: &["leaky relu", "leaky re"],
+        keys: &["leaky relu", "leaky re lu", "leaky rectified"],
         with: &[],
         name: "leaky ReLU (slope 0.01)",
+        name_el: "leaky ReLU (κλίση 0.01)",
         lhs: "LeakyReLU(x)",
         shown: "LeakyReLU(x) = max(0.01·x, x)",
         expr: "max(0.01*x,x)",
-        url: "https://en.wikipedia.org/wiki/Rectifier_(neural_networks)#Leaky_ReLU",
+        vars: &["x"],
+        function: true,
         forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Rectifier_(neural_networks)#Leaky_ReLU",
     },
     Formula {
         keys: &["softplus"],
         with: &[],
         name: "softplus",
+        name_el: "softplus",
         lhs: "softplus(x)",
         shown: "softplus(x) = ln(1 + e^x)",
         expr: "log(1+exp(x))",
-        url: "https://en.wikipedia.org/wiki/Softplus",
+        vars: &["x"],
+        function: true,
         forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Softplus",
+    },
+    Formula {
+        keys: &["pythagorean", "pythagoras", "hypotenuse"],
+        with: &[],
+        name: "the hypotenuse (Pythagorean theorem)",
+        name_el: "την υποτείνουσα (Πυθαγόρειο θεώρημα)",
+        lhs: "c",
+        shown: "c = √(a² + b²)",
+        expr: "sqrt(a^2+b^2)",
+        vars: &["a", "b"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Pythagorean_theorem",
+    },
+    Formula {
+        keys: &["area of a circle", "area of the circle", "circle area"],
+        with: &[],
+        name: "the area of a circle",
+        name_el: "το εμβαδόν κύκλου",
+        lhs: "A",
+        shown: "A = π · r²",
+        expr: "pi*r^2",
+        vars: &["r"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Area_of_a_circle",
+    },
+    Formula {
+        keys: &["circumference"],
+        with: &[],
+        name: "the circumference of a circle",
+        name_el: "την περίμετρο κύκλου",
+        lhs: "C",
+        shown: "C = 2 · π · r",
+        expr: "2*pi*r",
+        vars: &["r"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Circumference",
+    },
+    Formula {
+        keys: &["discriminant", "quadratic formula", "quadratic equation"],
+        with: &[],
+        name: "the discriminant of ax² + bx + c",
+        name_el: "τη διακρίνουσα του ax² + bx + c",
+        lhs: "Δ",
+        shown: "Δ = b² − 4ac",
+        expr: "b^2-4*a*c",
+        vars: &["a", "b", "c"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Discriminant",
+    },
+    Formula {
+        keys: &["second law of motion", "newton's second law", "newtons second law", "force equals mass"],
+        with: &[],
+        name: "Newton's second law",
+        name_el: "τον δεύτερο νόμο του Νεύτωνα",
+        lhs: "F",
+        shown: "F = m · a",
+        expr: "m*a",
+        vars: &["m", "a"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Newton%27s_laws_of_motion",
+    },
+    Formula {
+        keys: &["kinetic energy"],
+        with: &[],
+        name: "kinetic energy",
+        name_el: "την κινητική ενέργεια",
+        lhs: "E",
+        shown: "E = ½ · m · v²",
+        expr: "m*v^2/2",
+        vars: &["m", "v"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Kinetic_energy",
+    },
+    Formula {
+        keys: &["potential energy"],
+        with: &["gravit", "height", "mass"],
+        name: "gravitational potential energy",
+        name_el: "τη δυναμική ενέργεια βαρύτητας",
+        lhs: "E",
+        shown: "E = m · g · h",
+        expr: "m*g*h",
+        vars: &["m", "g", "h"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Potential_energy",
+    },
+    Formula {
+        keys: &["ohm's law", "ohms law", "ohm law"],
+        with: &[],
+        name: "Ohm's law",
+        name_el: "τον νόμο του Ohm",
+        lhs: "V",
+        shown: "V = I · R",
+        expr: "i*r",
+        vars: &["I", "R"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Ohm%27s_law",
+    },
+    Formula {
+        keys: &["electric power", "electrical power"],
+        with: &[],
+        name: "electric power",
+        name_el: "την ηλεκτρική ισχύ",
+        lhs: "P",
+        shown: "P = V · I",
+        expr: "v*i",
+        vars: &["V", "I"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Electric_power",
+    },
+    Formula {
+        keys: &["momentum"],
+        with: &["mass", "velocity"],
+        name: "momentum",
+        name_el: "την ορμή",
+        lhs: "p",
+        shown: "p = m · v",
+        expr: "m*v",
+        vars: &["m", "v"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Momentum",
+    },
+    Formula {
+        keys: &["density"],
+        with: &["mass", "volume"],
+        name: "density",
+        name_el: "την πυκνότητα",
+        lhs: "ρ",
+        shown: "ρ = m / V",
+        expr: "m/v",
+        vars: &["m", "V"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Density",
+    },
+    Formula {
+        keys: &["wave speed", "wavelength"],
+        with: &["frequency"],
+        name: "wave speed",
+        name_el: "την ταχύτητα κύματος",
+        lhs: "v",
+        shown: "v = f · λ",
+        expr: "f*λ",
+        vars: &["f", "λ"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Wavelength",
+    },
+    Formula {
+        keys: &["e=mc", "e = mc", "mass-energy", "mass energy equivalence"],
+        with: &[],
+        name: "mass–energy equivalence",
+        name_el: "την ισοδυναμία μάζας–ενέργειας",
+        lhs: "E",
+        shown: "E = m · c²",
+        expr: "m*c^2",
+        vars: &["m", "c"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Mass%E2%80%93energy_equivalence",
+    },
+    Formula {
+        keys: &["ideal gas"],
+        with: &[],
+        name: "the ideal gas law",
+        name_el: "τον νόμο των ιδανικών αερίων",
+        lhs: "P",
+        shown: "P = n · R · T / V",
+        expr: "n*r*t/v",
+        vars: &["n", "R", "T", "V"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Ideal_gas_law",
+    },
+    Formula {
+        keys: &["molarity", "molar concentration"],
+        with: &[],
+        name: "molarity",
+        name_el: "τη μοριακότητα",
+        lhs: "c",
+        shown: "c = n / V",
+        expr: "n/v",
+        vars: &["n", "V"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Molar_concentration",
+    },
+    Formula {
+        keys: &["ph value", "ph scale", "the ph of"],
+        with: &[],
+        name: "pH from the hydrogen ion concentration h",
+        name_el: "το pH από τη συγκέντρωση ιόντων υδρογόνου h",
+        lhs: "pH",
+        shown: "pH = −log₁₀(h)",
+        expr: "-log10(h)",
+        vars: &["h"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/PH",
+    },
+    Formula {
+        keys: &["simple interest"],
+        with: &[],
+        name: "simple interest",
+        name_el: "τον απλό τόκο",
+        lhs: "I",
+        shown: "I = P · r · t",
+        expr: "p*r*t",
+        vars: &["P", "r", "t"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Interest",
+    },
+    Formula {
+        keys: &["compound interest"],
+        with: &[],
+        name: "compound interest (yearly)",
+        name_el: "τον ανατοκισμό (ετήσιο)",
+        lhs: "A",
+        shown: "A = P · (1 + r)^t",
+        expr: "p*(1+r)^t",
+        vars: &["P", "r", "t"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Compound_interest",
+    },
+    Formula {
+        keys: &["profit"],
+        with: &["revenue", "cost"],
+        name: "profit",
+        name_el: "το κέρδος",
+        lhs: "π",
+        shown: "π = R − C (revenue − cost)",
+        expr: "r-c",
+        vars: &["R", "C"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Profit_(economics)",
+    },
+    Formula {
+        keys: &["return on investment"],
+        with: &[],
+        name: "return on investment",
+        name_el: "την απόδοση επένδυσης",
+        lhs: "ROI",
+        shown: "ROI = (G − C) / C (gain, cost)",
+        expr: "(g-c)/c",
+        vars: &["G", "C"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Return_on_investment",
+    },
+    Formula {
+        keys: &["z-score", "z score", "standard score"],
+        with: &[],
+        name: "the z-score",
+        name_el: "το z-score",
+        lhs: "z",
+        shown: "z = (x − μ) / σ",
+        expr: "(x-μ)/σ",
+        vars: &["x", "μ", "σ"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Standard_score",
+    },
+    Formula {
+        keys: &["body mass index", "bmi"],
+        with: &[],
+        name: "body mass index",
+        name_el: "τον δείκτη μάζας σώματος",
+        lhs: "BMI",
+        shown: "BMI = m / h² (kg, m)",
+        expr: "m/h^2",
+        vars: &["m", "h"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Body_mass_index",
+    },
+    Formula {
+        keys: &["exponential growth", "population growth"],
+        with: &[],
+        name: "exponential population growth",
+        name_el: "την εκθετική αύξηση πληθυσμού",
+        lhs: "N(t)",
+        shown: "N(t) = N0 · e^(r·t)",
+        expr: "n0*exp(r*t)",
+        vars: &["N0", "r", "t"],
+        function: false,
+        forbid: &[],
+        url: "https://en.wikipedia.org/wiki/Exponential_growth",
     },
 ];
 const BLANK: &str = "_____";
@@ -244,6 +575,9 @@ const EDGE_WORDS: &[&str] = &[
     "that's", "it's", "let's", "we're", "you're", "they're", "i'm", "don't", "doesn't", "can't", "won't", "isn't",
     "aren't", "welcome", "hello", "hi", "bye", "please", "thank", "today", "tomorrow", "yesterday", "morrow",
     "important", "very", "remember", "exam", "minimizing", "minimize", "using",
+    "depends", "becomes", "absorbs", "takes", "turns", "breaks", "stores", "appears", "produces", "contains",
+    "four", "five", "six", "seven", "eight", "nine", "ten", "twice", "times", "larger", "smaller",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "week", "weeks", "month", "months",
 ];
 
 fn is_stop(w: &str) -> bool {
@@ -290,7 +624,7 @@ pub fn keyphrases(texts: &[&str], centroid: &[f32], embed: &dyn Fn(&str) -> Vec<
         for n in 1..=3 {
             for win in w.windows(n) {
                 // Inside a phrase only "of" may be a stop word ("rate of change").
-                let inner_stop = win[1..n.max(2) - 1].iter().any(|x| is_stop(x) && !x.eq_ignore_ascii_case("of"));
+                let inner_stop = win[1..n.max(2) - 1].iter().any(|x| (is_stop(x) || EDGE_WORDS.contains(&x.to_lowercase().as_str())) && !x.eq_ignore_ascii_case("of"));
                 if inner_stop || is_edge_stop(&win[0]) || is_edge_stop(&win[n - 1]) || win.iter().any(|x| x.chars().all(|c| c.is_numeric())) {
                     continue;
                 }
@@ -735,12 +1069,17 @@ pub fn build(notes: &Notes, embed: &dyn Fn(&str) -> Vec<f32>, seed: u64, lang: &
         if concept_qs.len() >= MAX_CONCEPTS {
             break;
         }
+        // "Monday" is in Wikipedia too, but not a concept of the lecture.
+        if WEEKDAYS.iter().chain(MONTHS).any(|d| d.eq_ignore_ascii_case(&plain_title(&c.title))) {
+            continue;
+        }
         let ce = embed(&c.definition);
         let mut others: Vec<(f32, String)> = all_defs
             .iter()
             .filter(|(d, _)| d.title != c.title && !overlapping(&d.title, &c.title))
             .map(|(d, e)| (cosine(&ce, e), hide_term(&d.definition, d)))
-            .filter(|(sim, text)| *sim < 0.9 && find_term(text, &c.title).is_none() && (c.acronym.is_empty() || find_term(text, &c.acronym).is_none()))
+            // Below 0.75: a definition that close says the same thing in other words.
+            .filter(|(sim, text)| *sim < 0.75 && find_term(text, &c.title).is_none() && (c.acronym.is_empty() || find_term(text, &c.acronym).is_none()))
             .collect();
         others.sort_by(|a, b| b.0.total_cmp(&a.0));
         let wrong: Vec<String> = others.into_iter().map(|o| o.1).take(3).collect();
@@ -782,13 +1121,17 @@ pub fn build(notes: &Notes, embed: &dyn Fn(&str) -> Vec<f32>, seed: u64, lang: &
         if equation_qs.len() >= MAX_EQUATIONS {
             break;
         }
-        let present = f.keys.iter().any(|k| everything.contains(k));
+        // Whole words: "bmi" must not match "submit".
+        let present = f.keys.iter().any(|k| find_term(&everything, k).is_some());
         let context = f.with.is_empty() || f.with.iter().any(|k| everything.contains(k));
         if present && context {
+            let name = if lang == "el" { f.name_el } else { f.name };
+            let prompt = if f.function { (w.equation)(name, f.lhs) } else { (w.formula)(name, f.lhs, &f.vars.join(", ")) };
             equation_qs.push(Question {
                 origin: "source".into(),
                 kind: "input".into(),
-                prompt: (w.equation)(f.name, f.lhs),
+                prompt,
+                vars: f.vars.iter().map(|v| v.to_string()).collect(),
                 explain: f.shown.into(),
                 url: f.url.into(),
                 expr: f.expr.into(),

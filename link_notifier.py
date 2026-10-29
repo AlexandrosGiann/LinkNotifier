@@ -104,6 +104,14 @@ DEFAULT_CHECKLIST_SETTINGS = {
 
 HISTORY_DAYS = 60
 
+# How an obligation gets its tick without the user.
+OBLIGATION_AUTO = {
+    "manual": "Χειροκίνητα",
+    "time": "Σε συγκεκριμένη ώρα",
+    "classes": "Στο τέλος του μαθήματος",
+    "driving": "Όταν ολοκληρωθεί τεστ Κ.Ο.Κ.",
+}
+
 # ------------------------------------------------------------
 # Observer (meeting notes agent, Rust: observer/)
 # ------------------------------------------------------------
@@ -208,6 +216,11 @@ def load_data():
         )
     for key, value in DEFAULT_CHECKLIST_SETTINGS.items():
         settings.setdefault(key, json.loads(json.dumps(value)))
+
+    # Older data files had the five tasks hard-coded: seed them once. An
+    # empty list afterwards is the user's choice and is kept.
+    if "obligations" not in data:
+        data["obligations"] = default_obligations(settings)
 
     for key, value in DEFAULT_OBSERVER_SETTINGS.items():
         data["observer_settings"].setdefault(key, value)
@@ -363,6 +376,59 @@ def masters_schedule_from_links(links):
     return schedule
 
 
+def default_obligations(settings):
+    """The original five tasks, with the rules they had before the list
+    became editable."""
+    auto = {
+        "work": {
+            "auto": "time",
+            "time": settings.get("work_auto_time", "18:30"),
+            "days": list(settings.get("work_days", DAY_NAMES[:5])),
+        },
+        "masters": {"auto": "classes"},
+        "driving": {"auto": "driving"},
+    }
+    out = []
+    for task_id, label in CHECKLIST_TASKS:
+        item = {
+            "id": task_id,
+            "name": label,
+            "days": [],
+            "auto": "manual",
+            "time": "",
+            "active": True,
+        }
+        item.update(auto.get(task_id, {}))
+        out.append(item)
+    return out
+
+
+def new_obligation_id(obligations):
+    used = {o["id"] for o in obligations}
+    n = 1
+    while f"task{n}" in used:
+        n += 1
+    return f"task{n}"
+
+
+def obligations_today(data, now=None):
+    """Active obligations that apply on this weekday (no days = every day)."""
+    weekday = (now or datetime.now()).strftime("%A")
+    return [
+        o for o in data["obligations"]
+        if o.get("active", True)
+        and (not o.get("days") or weekday in o["days"])
+    ]
+
+
+def describe_days(days):
+    if not days or len(days) == 7:
+        return "Κάθε μέρα"
+    if days == DAY_NAMES[:5]:
+        return "Δευτέρα–Παρασκευή"
+    return ", ".join(DAY_LABELS[d][:3] for d in DAY_NAMES if d in days)
+
+
 def ensure_checklist_today(data, now=None):
     """Resets the checklist when the date has changed. Returns True if reset."""
     now = now or datetime.now()
@@ -472,27 +538,33 @@ def apply_checklist_rules(data, now=None):
     weekday = now.strftime("%A")
     newly = []
 
-    # A task the user has already touched today is left alone.
-    if "work" not in items:
-        if weekday in settings["work_days"] and current >= settings["work_auto_time"]:
-            set_checklist_item(data, "work", True, "auto", now=now)
-            newly.append("work")
+    for ob in obligations_today(data, now):
+        task_id, auto = ob["id"], ob.get("auto", "manual")
 
-    if "masters" not in items:
-        end = settings["masters_schedule"].get(weekday, "")
-        if end and current >= end:
-            set_checklist_item(data, "masters", True, "auto", now=now)
-            newly.append("masters")
+        # A finished test is hard evidence, so it overrides a manual uncheck.
+        if auto == "driving":
+            if not items.get(task_id, {}).get("done"):
+                test = driving_test_on(now.strftime("%Y-%m-%d"))
+                if test:
+                    set_checklist_item(
+                        data, task_id, True, "test",
+                        note=describe_driving_test(test), now=now
+                    )
+                    newly.append(task_id)
+            continue
 
-    # A finished test is hard evidence, so it overrides a manual uncheck.
-    if not items.get("driving", {}).get("done"):
-        test = driving_test_on(now.strftime("%Y-%m-%d"))
-        if test:
-            set_checklist_item(
-                data, "driving", True, "test",
-                note=describe_driving_test(test), now=now
-            )
-            newly.append("driving")
+        # A task the user has already touched today is left alone.
+        if task_id in items:
+            continue
+        if auto == "time":
+            due = ob.get("time", "")
+        elif auto == "classes":
+            due = settings["masters_schedule"].get(weekday, "")
+        else:
+            due = ""
+        if due and current >= due:
+            set_checklist_item(data, task_id, True, "auto", now=now)
+            newly.append(task_id)
 
     return newly
 
@@ -614,18 +686,21 @@ class LinkNotifierApp:
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
         self.checklist_tab = ttk.Frame(notebook)
+        self.obligations_tab = ttk.Frame(notebook)
         self.links_tab = ttk.Frame(notebook)
         self.youtube_tab = ttk.Frame(notebook)
         self.pages_tab = ttk.Frame(notebook)
         self.observer_tab = ttk.Frame(notebook)
 
         notebook.add(self.checklist_tab, text="Σήμερα")
+        notebook.add(self.obligations_tab, text="Υποχρεώσεις")
         notebook.add(self.links_tab, text="Σύνδεσμοι")
         notebook.add(self.youtube_tab, text="YouTube")
         notebook.add(self.pages_tab, text="Ιστοσελίδες")
         notebook.add(self.observer_tab, text="Observer")
 
         self.build_checklist_tab()
+        self.build_obligations_tab()
         self.build_links_tab()
         self.build_youtube_tab()
         self.build_pages_tab()
@@ -659,37 +734,17 @@ class LinkNotifierApp:
 
         box = ttk.LabelFrame(
             self.checklist_tab,
-            text="Καθημερινές υποχρεώσεις (μηδενίζονται κάθε μέρα)"
+            text="Σημερινές υποχρεώσεις (μηδενίζονται κάθε μέρα)"
         )
         box.pack(fill="x", padx=10, pady=10)
         box.columnconfigure(1, weight=1)
 
+        # Rows are built from the obligations list on every refresh that
+        # finds it changed (see rebuild_task_rows).
+        self.tasks_box = box
+        self.task_rows_key = None
         self.task_vars = {}
         self.task_info_vars = {}
-
-        for row, (task_id, label) in enumerate(CHECKLIST_TASKS):
-            var = tk.BooleanVar()
-            self.task_vars[task_id] = var
-            ttk.Checkbutton(
-                box,
-                text=label,
-                variable=var,
-                width=26,
-                command=lambda t=task_id: self.toggle_task(t)
-            ).grid(row=row, column=0, padx=8, pady=6, sticky="w")
-
-            info = tk.StringVar()
-            self.task_info_vars[task_id] = info
-            ttk.Label(box, textvariable=info, foreground="#555").grid(
-                row=row, column=1, padx=8, pady=6, sticky="w"
-            )
-
-            if task_id == "driving":
-                ttk.Button(
-                    box,
-                    text="Άνοιγμα τεστ",
-                    command=self.open_driving_test
-                ).grid(row=row, column=2, padx=8, pady=6)
 
         buttons = ttk.Frame(self.checklist_tab)
         buttons.pack(fill="x", padx=10)
@@ -705,19 +760,336 @@ class LinkNotifierApp:
             text="Τελευταίες 14 ημέρες"
         ).pack(anchor="w", padx=12, pady=(14, 0))
 
-        columns = ("date",) + tuple(t for t, _ in CHECKLIST_TASKS)
         self.history_tree = ttk.Treeview(
             self.checklist_tab,
-            columns=columns,
+            columns=("date",),
             show="headings",
             height=8
         )
+        self.history_columns = None
+        self.history_tree.pack(fill="both", expand=True, padx=10, pady=5)
+
+    def rebuild_task_rows(self, today):
+        for child in self.tasks_box.winfo_children():
+            child.destroy()
+        self.task_vars = {}
+        self.task_info_vars = {}
+
+        if not today:
+            ttk.Label(
+                self.tasks_box,
+                text="Καμία υποχρέωση για σήμερα. Πρόσθεσε στο tab Υποχρεώσεις.",
+                foreground="#555"
+            ).grid(row=0, column=0, padx=8, pady=6, sticky="w")
+
+        for row, ob in enumerate(today):
+            task_id = ob["id"]
+            var = tk.BooleanVar()
+            self.task_vars[task_id] = var
+            ttk.Checkbutton(
+                self.tasks_box,
+                text=ob["name"],
+                variable=var,
+                width=26,
+                command=lambda t=task_id: self.toggle_task(t)
+            ).grid(row=row, column=0, padx=8, pady=6, sticky="w")
+
+            info = tk.StringVar()
+            self.task_info_vars[task_id] = info
+            ttk.Label(self.tasks_box, textvariable=info, foreground="#555").grid(
+                row=row, column=1, padx=8, pady=6, sticky="w"
+            )
+
+            if ob.get("auto") == "driving":
+                ttk.Button(
+                    self.tasks_box,
+                    text="Άνοιγμα τεστ",
+                    command=self.open_driving_test
+                ).grid(row=row, column=2, padx=8, pady=6)
+
+    def update_history_columns(self, obligations):
+        columns = tuple(o["id"] for o in obligations if o.get("active", True))
+        key = tuple((o["id"], o["name"]) for o in obligations if o.get("active", True))
+        if key == self.history_columns:
+            return
+        self.history_columns = key
+        self.history_tree["columns"] = ("date",) + columns
         self.history_tree.heading("date", text="Ημερομηνία")
         self.history_tree.column("date", width=160)
-        for task_id, label in CHECKLIST_TASKS:
-            self.history_tree.heading(task_id, text=label)
-            self.history_tree.column(task_id, width=150, anchor="center")
-        self.history_tree.pack(fill="both", expand=True, padx=10, pady=5)
+        for task_id, name in key:
+            self.history_tree.heading(task_id, text=name)
+            self.history_tree.column(task_id, width=130, anchor="center")
+
+    # --------------------------------------------------------
+    # Obligations
+    # --------------------------------------------------------
+
+    def build_obligations_tab(self):
+        ttk.Label(
+            self.obligations_tab,
+            text=(
+                "Οι υποχρεώσεις που εμφανίζονται στη λίστα της ημέρας. "
+                "Διπλό κλικ για επεξεργασία."
+            ),
+            foreground="#555"
+        ).pack(anchor="w", padx=12, pady=(12, 4))
+
+        self.obligations_tree = ttk.Treeview(
+            self.obligations_tab,
+            columns=("name", "days", "auto", "active"),
+            show="headings",
+            height=12
+        )
+        for col, text, width in (
+            ("name", "Υποχρέωση", 220),
+            ("days", "Ημέρες", 220),
+            ("auto", "Τικ", 300),
+            ("active", "Ενεργή", 80),
+        ):
+            self.obligations_tree.heading(col, text=text)
+            self.obligations_tree.column(
+                col, width=width, anchor="center" if col == "active" else "w"
+            )
+        self.obligations_tree.pack(fill="both", expand=True, padx=10, pady=5)
+        self.obligations_tree.bind(
+            "<Double-1>", lambda _e: self.edit_selected_obligation()
+        )
+
+        buttons = ttk.Frame(self.obligations_tab)
+        buttons.pack(fill="x", padx=10, pady=(0, 10))
+        for text, command in (
+            ("Προσθήκη", lambda: self.open_obligation_editor(None)),
+            ("Επεξεργασία", self.edit_selected_obligation),
+            ("Διαγραφή", self.delete_selected_obligation),
+            ("▲ Πάνω", lambda: self.move_selected_obligation(-1)),
+            ("▼ Κάτω", lambda: self.move_selected_obligation(1)),
+        ):
+            ttk.Button(buttons, text=text, command=command).pack(
+                side="left", padx=(0, 6)
+            )
+        ttk.Button(
+            buttons,
+            text="Ώρες μαθημάτων / τεστ Κ.Ο.Κ.",
+            command=self.open_checklist_settings
+        ).pack(side="right")
+
+    def describe_auto(self, ob):
+        auto = ob.get("auto", "manual")
+        if auto == "time":
+            return f"Αυτόματα στις {ob.get('time', '')}"
+        return OBLIGATION_AUTO.get(auto, auto)
+
+    def refresh_obligations(self):
+        obligations = load_data()["obligations"]
+        selected = self.obligations_tree.selection()
+        for row in self.obligations_tree.get_children():
+            self.obligations_tree.delete(row)
+        for ob in obligations:
+            self.obligations_tree.insert(
+                "",
+                tk.END,
+                iid=ob["id"],
+                values=(
+                    ob["name"],
+                    describe_days(ob.get("days", [])),
+                    self.describe_auto(ob),
+                    "Ναι" if ob.get("active", True) else "Όχι",
+                )
+            )
+        keep = [i for i in selected if self.obligations_tree.exists(i)]
+        if keep:
+            self.obligations_tree.selection_set(keep)
+
+    def selected_obligation_id(self):
+        selected = self.obligations_tree.selection()
+        if not selected:
+            messagebox.showinfo("Υποχρεώσεις", "Επίλεξε μια υποχρέωση.")
+            return None
+        return selected[0]
+
+    def edit_selected_obligation(self):
+        task_id = self.selected_obligation_id()
+        if task_id:
+            self.open_obligation_editor(task_id)
+
+    def obligations_changed(self):
+        self.refresh_obligations()
+        self.refresh_checklist()
+        threading.Thread(target=self.check_checklist, daemon=True).start()
+
+    def delete_selected_obligation(self):
+        task_id = self.selected_obligation_id()
+        if not task_id:
+            return
+        with DATA_LOCK:
+            data = load_data()
+            ob = next((o for o in data["obligations"] if o["id"] == task_id), None)
+            if not ob:
+                return
+            if not messagebox.askyesno(
+                "Υποχρεώσεις",
+                f"Διαγραφή της υποχρέωσης «{ob['name']}»;\n\n"
+                "Το ιστορικό των προηγούμενων ημερών δεν θα εμφανίζεται πια "
+                "γι' αυτήν. Αν θέλεις να την κρατήσεις, κάν' την ανενεργή."
+            ):
+                return
+            data["obligations"] = [
+                o for o in data["obligations"] if o["id"] != task_id
+            ]
+            data["checklist"]["items"].pop(task_id, None)
+            save_data(data)
+        self.obligations_changed()
+
+    def move_selected_obligation(self, step):
+        task_id = self.selected_obligation_id()
+        if not task_id:
+            return
+        with DATA_LOCK:
+            data = load_data()
+            obs = data["obligations"]
+            i = next((k for k, o in enumerate(obs) if o["id"] == task_id), None)
+            if i is None or not 0 <= i + step < len(obs):
+                return
+            obs[i], obs[i + step] = obs[i + step], obs[i]
+            save_data(data)
+        self.obligations_changed()
+        self.obligations_tree.selection_set(task_id)
+
+    def open_obligation_editor(self, task_id):
+        data = load_data()
+        ob = next(
+            (o for o in data["obligations"] if o["id"] == task_id),
+            None
+        ) if task_id else None
+        ob = ob or {
+            "name": "", "days": [], "auto": "manual",
+            "time": "", "active": True,
+        }
+
+        window = tk.Toplevel(self.root)
+        window.title("Επεξεργασία υποχρέωσης" if task_id else "Νέα υποχρέωση")
+        window.transient(self.root)
+        window.resizable(False, False)
+
+        box = ttk.Frame(window)
+        box.pack(fill="both", padx=12, pady=12)
+
+        ttk.Label(box, text="Όνομα:").grid(row=0, column=0, sticky="w")
+        name = ttk.Entry(box, width=36)
+        name.insert(0, ob["name"])
+        name.grid(row=0, column=1, sticky="w", pady=3)
+        name.focus_set()
+
+        ttk.Label(box, text="Ημέρες:").grid(row=1, column=0, sticky="nw")
+        days_frame = ttk.Frame(box)
+        days_frame.grid(row=1, column=1, sticky="w", pady=3)
+        day_vars = {}
+        for i, day in enumerate(DAY_NAMES):
+            var = tk.BooleanVar(value=day in ob.get("days", []))
+            day_vars[day] = var
+            ttk.Checkbutton(
+                days_frame, text=DAY_LABELS[day][:3], variable=var
+            ).grid(row=0, column=i, padx=2)
+        ttk.Label(
+            box,
+            text="Καμία επιλογή = κάθε μέρα.",
+            foreground="#555"
+        ).grid(row=2, column=1, sticky="w")
+
+        ttk.Label(box, text="Τικ:").grid(row=3, column=0, sticky="w")
+        auto_labels = list(OBLIGATION_AUTO.values())
+        auto = ttk.Combobox(
+            box, values=auto_labels, state="readonly", width=34
+        )
+        auto.set(OBLIGATION_AUTO.get(ob.get("auto", "manual")))
+        auto.grid(row=3, column=1, sticky="w", pady=3)
+
+        ttk.Label(box, text="Ώρα (HH:MM):").grid(row=4, column=0, sticky="w")
+        time_entry = ttk.Entry(box, width=8)
+        time_entry.insert(0, ob.get("time", ""))
+        time_entry.grid(row=4, column=1, sticky="w", pady=3)
+
+        hint = tk.StringVar()
+        ttk.Label(box, textvariable=hint, foreground="#555", wraplength=360).grid(
+            row=5, column=1, sticky="w"
+        )
+
+        def on_auto(_event=None):
+            key = auto_labels.index(auto.get())
+            kind = list(OBLIGATION_AUTO)[key]
+            time_entry.configure(state="normal" if kind == "time" else "disabled")
+            hint.set({
+                "manual": "Το τικ το βάζεις εσύ.",
+                "time": "Τικ αυτόματα σε αυτή την ώρα, τις ημέρες που ισχύει.",
+                "classes": "Τικ όταν τελειώνει το μάθημα της ημέρας "
+                           "(ώρες στο «Ώρες μαθημάτων / τεστ Κ.Ο.Κ.»).",
+                "driving": "Τικ όταν ολοκληρωθεί τεστ Κ.Ο.Κ. τοπικά· "
+                           "το τεστ ανοίγει μόνο του κάθε μέρα.",
+            }[kind])
+
+        auto.bind("<<ComboboxSelected>>", on_auto)
+        on_auto()
+
+        active = tk.BooleanVar(value=ob.get("active", True))
+        ttk.Checkbutton(
+            box,
+            text="Ενεργή (εμφανίζεται στη λίστα της ημέρας)",
+            variable=active
+        ).grid(row=6, column=1, sticky="w", pady=(6, 0))
+
+        def save():
+            new_name = name.get().strip()
+            if not new_name:
+                messagebox.showerror(
+                    "Υποχρεώσεις", "Δώσε όνομα.", parent=window
+                )
+                return
+            kind = list(OBLIGATION_AUTO)[auto_labels.index(auto.get())]
+            new_time = ""
+            if kind == "time":
+                try:
+                    new_time = datetime.strptime(
+                        time_entry.get().strip(), "%H:%M"
+                    ).strftime("%H:%M")
+                except ValueError:
+                    messagebox.showerror(
+                        "Υποχρεώσεις",
+                        "Η ώρα πρέπει να είναι σε μορφή HH:MM.",
+                        parent=window
+                    )
+                    return
+            days = [d for d in DAY_NAMES if day_vars[d].get()]
+            if len(days) == 7:
+                days = []
+
+            with DATA_LOCK:
+                data = load_data()
+                obs = data["obligations"]
+                current = next(
+                    (o for o in obs if o["id"] == task_id), None
+                ) if task_id else None
+                if current is None:
+                    current = {"id": new_obligation_id(obs)}
+                    obs.append(current)
+                current.update({
+                    "name": new_name,
+                    "days": days,
+                    "auto": kind,
+                    "time": new_time,
+                    "active": bool(active.get()),
+                })
+                save_data(data)
+
+            window.destroy()
+            self.obligations_changed()
+
+        buttons = ttk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(buttons, text="Αποθήκευση", command=save).pack(side="right")
+        ttk.Button(buttons, text="Άκυρο", command=window.destroy).pack(
+            side="right", padx=6
+        )
+        window.bind("<Return>", lambda _e: save())
 
     def build_links_tab(self):
         box = ttk.LabelFrame(
@@ -1629,8 +2001,16 @@ class LinkNotifierApp:
             newly = apply_checklist_rules(data, now)
             changed = changed or bool(newly)
 
+            driving_ids = [
+                o["id"] for o in obligations_today(data, now)
+                if o.get("auto") == "driving"
+            ]
             open_test = (
-                not checklist["items"].get("driving", {}).get("done")
+                bool(driving_ids)
+                and not any(
+                    checklist["items"].get(t, {}).get("done")
+                    for t in driving_ids
+                )
                 and not checklist.get("driving_opened")
                 and now.strftime("%H:%M") >= settings["driving_open_time"]
             )
@@ -1641,7 +2021,7 @@ class LinkNotifierApp:
             if changed:
                 save_data(data)
 
-        labels = dict(CHECKLIST_TASKS)
+        labels = {o["id"]: o["name"] for o in data["obligations"]}
         for task_id in newly:
             notify(
                 f"✓ {labels[task_id]}",
@@ -1675,25 +2055,30 @@ class LinkNotifierApp:
             f"{DAY_LABELS[weekday]} {now:%d/%m/%Y}"
         )
 
+        today = obligations_today(data, now)
+        key = tuple((o["id"], o["name"], o.get("auto")) for o in today)
+        if key != self.task_rows_key:
+            self.task_rows_key = key
+            self.rebuild_task_rows(today)
+        self.update_history_columns(data["obligations"])
+
         done_count = 0
-        for task_id, _ in CHECKLIST_TASKS:
+        for ob in today:
+            task_id, auto = ob["id"], ob.get("auto", "manual")
             state = items.get(task_id, {})
             done = bool(state.get("done"))
             done_count += done
             self.task_vars[task_id].set(done)
 
-            if task_id == "work":
-                if weekday in settings["work_days"]:
-                    info = f"Αυτόματο τικ στις {settings['work_auto_time']}"
-                else:
-                    info = "Μη εργάσιμη — χειροκίνητα"
-            elif task_id == "masters":
+            if auto == "time":
+                info = f"Αυτόματο τικ στις {ob.get('time', '')}"
+            elif auto == "classes":
                 end = settings["masters_schedule"].get(weekday, "")
                 if end:
                     info = f"Μάθημα σήμερα — αυτόματο τικ στις {end}"
                 else:
                     info = "Χωρίς μάθημα σήμερα — χειροκίνητα"
-            elif task_id == "driving":
+            elif auto == "driving":
                 if state.get("by") == "test" and done:
                     info = state.get("note", "Τεστ ολοκληρώθηκε")
                 else:
@@ -1713,7 +2098,7 @@ class LinkNotifierApp:
             self.task_info_vars[task_id].set(info)
 
         self.checklist_progress_var.set(
-            f"{done_count}/{len(CHECKLIST_TASKS)} ολοκληρώθηκαν"
+            f"{done_count}/{len(today)} ολοκληρώθηκαν"
         )
 
         for row in self.history_tree.get_children():
@@ -1732,7 +2117,7 @@ class LinkNotifierApp:
                 tk.END,
                 values=(date_text,) + tuple(
                     "✓" if task_id in done_ids else "—"
-                    for task_id, _ in CHECKLIST_TASKS
+                    for task_id, _ in self.history_columns
                 )
             )
 
@@ -1782,35 +2167,17 @@ class LinkNotifierApp:
         settings = load_data()["checklist_settings"]
 
         window = tk.Toplevel(self.root)
-        window.title("Ρυθμίσεις λίστας")
+        window.title("Ώρες μαθημάτων / τεστ Κ.Ο.Κ.")
         window.transient(self.root)
         window.resizable(False, False)
 
-        work_box = ttk.LabelFrame(window, text="Δουλειά")
-        work_box.pack(fill="x", padx=12, pady=(12, 6))
-
-        ttk.Label(work_box, text="Αυτόματο τικ στις:").grid(
-            row=0, column=0, padx=5, pady=5, sticky="w"
-        )
-        work_time = ttk.Entry(work_box, width=8)
-        work_time.insert(0, settings["work_auto_time"])
-        work_time.grid(row=0, column=1, padx=5, pady=5, sticky="w")
-
-        work_days_frame = ttk.Frame(work_box)
-        work_days_frame.grid(row=1, column=0, columnspan=2, padx=5, pady=5)
-        work_day_vars = {}
-        for i, day in enumerate(DAY_NAMES):
-            var = tk.BooleanVar(value=day in settings["work_days"])
-            work_day_vars[day] = var
-            ttk.Checkbutton(
-                work_days_frame, text=DAY_LABELS[day], variable=var
-            ).grid(row=0, column=i, padx=3)
-
+        # Times and days of each obligation are set in the Obligations tab;
+        # these settings serve the "classes" and "driving" rules.
         masters_box = ttk.LabelFrame(
             window,
-            text="Μεταπτυχιακό — ώρα λήξης μαθημάτων (κενό = χωρίς μάθημα)"
+            text="Ώρα λήξης μαθημάτων (κενό = χωρίς μάθημα) — για «Στο τέλος του μαθήματος»"
         )
-        masters_box.pack(fill="x", padx=12, pady=6)
+        masters_box.pack(fill="x", padx=12, pady=(12, 6))
 
         masters_entries = {}
         for i, day in enumerate(DAY_NAMES):
@@ -1836,7 +2203,7 @@ class LinkNotifierApp:
             command=sync_from_links
         ).grid(row=2, column=0, columnspan=8, padx=5, pady=6, sticky="w")
 
-        driving_box = ttk.LabelFrame(window, text="Οδήγηση")
+        driving_box = ttk.LabelFrame(window, text="Τεστ Κ.Ο.Κ.")
         driving_box.pack(fill="x", padx=12, pady=6)
 
         ttk.Label(driving_box, text="Άνοιγμα τεστ στις:").grid(
@@ -1870,7 +2237,6 @@ class LinkNotifierApp:
 
         def save():
             try:
-                new_work_time = normalize_time(work_time.get())
                 new_driving_time = normalize_time(driving_time.get())
                 schedule = {
                     day: normalize_time(entry.get())
@@ -1892,10 +2258,6 @@ class LinkNotifierApp:
                 data = load_data()
                 s = data["checklist_settings"]
                 dir_changed = s["alex_dir"] != new_dir
-                s["work_auto_time"] = new_work_time
-                s["work_days"] = [
-                    d for d, v in work_day_vars.items() if v.get()
-                ]
                 s["masters_schedule"] = schedule
                 s["driving_open_time"] = new_driving_time
                 s["alex_dir"] = new_dir
@@ -2527,6 +2889,7 @@ class LinkNotifierApp:
     # --------------------------------------------------------
 
     def refresh_all(self):
+        self.refresh_obligations()
         self.refresh_checklist()
         self.refresh_links()
         self.refresh_youtube()

@@ -6,8 +6,10 @@ Microsoft Teams meetings and turns them into a self-check quiz.
 
 ## What it does
 
-- **Today**: a daily checklist (work, master's classes, gym, driving test
-  practice, personal projects) with automatic checks.
+- **Today / Obligations**: a daily checklist built from an editable list of
+  obligations (work, classes, gym, driving test practice, personal
+  projects, or anything else), each on chosen days, checked by hand, at a
+  time, when the day's classes end, or when a driving test is finished.
 - **Links**: links that open only during their time window, with a
   notification when the window starts.
 - **YouTube / Websites**: notifications for new videos and page changes.
@@ -18,10 +20,11 @@ Microsoft Teams meetings and turns them into a self-check quiz.
     screenshots of new slides;
   - notifies you when your name is said or something sounds important
     ("this will be on the exam", a deadline, a new task);
-  - when it stops, builds `quiz.html`: "What is a CNN?", "What does GAN
-    stand for?", "Type the equation of the sigmoid function", and
-    fill-in-the-blank on what was said, with related Wikipedia articles.
-    The quiz leaves out people's names, so it can be shared.
+  - when it stops, builds `quiz.html` for any subject: "What is a CNN?",
+    "What is photosynthesis?", "What does ATP stand for?", "Type the
+    formula for kinetic energy", and fill-in-the-blank on what was said,
+    with related Wikipedia articles. The quiz leaves out people's names, so
+    it can be shared.
 
 Details: [observer/README.md](observer/README.md) and [README.txt](README.txt).
 

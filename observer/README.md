@@ -83,14 +83,24 @@ only the mistakes".
   field are kept for their definitions only. Only key phrases are sent,
   never the transcript and never a name. Turn it off with "Αναζήτηση
   σχετικών πηγών" (`--no-web`).
+- Works for any subject: concepts, acronyms and fill-in-the-blank come from
+  the session and Wikipedia, whatever the field.
 - Questions, in this order:
   - **concepts**: "What is a CNN?", the options being the Wikipedia
     definitions of the concept and of related ones;
   - **acronyms**: "What does GAN stand for?";
-  - **equations**: "Type the equation of the sigmoid function". Sigmoid, its
-    derivative, tanh, ReLU, leaky ReLU and softplus are asked when the
-    session mentions them. The page evaluates the typed formula at several
-    points, so `1/(1+e^-x)`, `e^x/(e^x+1)` and `(1+exp(-x))^-1` all count;
+  - **equations**: "Type the equation of the sigmoid function", "Type the
+    formula for kinetic energy: E = ? (variables: m, v)". About thirty
+    formulas are asked when the session mentions them: machine learning
+    (sigmoid and its derivative, tanh, ReLU, leaky ReLU, softplus),
+    mathematics (Pythagorean theorem, circle, discriminant), physics
+    (Newton's second law, kinetic and potential energy, Ohm's law, power,
+    momentum, density, waves, E = mc², ideal gas), chemistry (molarity, pH),
+    finance (simple and compound interest, profit, ROI), statistics (z-score)
+    and biology (BMI, exponential growth). Ambiguous words need context:
+    "momentum" asks the physics formula only when mass or velocity is
+    mentioned too. The page evaluates the typed formula at several points,
+    so `1/(1+e^-x)` and `e^x/(e^x+1)`, or `½mv²` and `0.5*m*v^2`, all count;
     typing the function's own name (`tanh(x)`) does not;
   - fill-in-the-blank on sentences said in the session and of the sources.
 - Every question links back to the moment [mm:ss] or the article it came from.

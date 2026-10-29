@@ -83,24 +83,30 @@ HTTP 404/other feed errors. It will be retried during the next
 automatic 3-hour check.
 
 
-DAILY CHECKLIST (tab "Σήμερα")
-------------------------------
-Tasks: Δουλειά, Μεταπτυχιακό, Γυμναστική, Οδήγηση, Προσωπικά projects.
-The list resets every day; past days are kept in the history table (60 days).
+DAILY CHECKLIST (tabs "Σήμερα" and "Υποχρεώσεις")
+--------------------------------------------------
+The obligations are an editable list (tab "Υποχρεώσεις"): add, edit
+(double click), delete, move up/down, or make one inactive to hide it
+without losing its history. Each has:
+- a name;
+- days (none = every day): it appears in "Σήμερα" only on those days;
+- how it gets checked:
+  - Χειροκίνητα: by you;
+  - Σε συγκεκριμένη ώρα: automatically at a time (e.g. work at 18:30);
+  - Στο τέλος του μαθήματος: when the day's classes end (class end times
+    under "Ώρες μαθημάτων / τεστ Κ.Ο.Κ.", seeded from the scheduled links);
+  - Όταν ολοκληρωθεί τεστ Κ.Ο.Κ.: the K.O.K. test
+    (alex151807\quizzes_kok.html) opens once a day (default 10:00) via a
+    local server at http://127.0.0.1:8765; a finished test is recorded in
+    %LOCALAPPDATA%\LinkNotifier\driving_tests.json and checks the task.
+    Tests taken on the GitHub Pages site are NOT detected - use the
+    "Άνοιγμα τεστ" button or the daily auto-open.
+The first start seeds the five original obligations (Δουλειά Mon-Fri at
+18:30, Μεταπτυχιακό, Γυμναστική, Οδήγηση, Προσωπικά projects) with the
+settings they had.
 
-Automatic checks (a task you check/uncheck yourself is left alone that day):
-- Δουλειά: checked at 18:30 on work days (default Mon-Fri).
-- Μεταπτυχιακό: checked when the day's classes end (seeded from the
-  scheduled links: Mon/Tue/Wed 21:00, Sat 14:00). Other days: manual.
-- Οδήγηση: the K.O.K. test (alex151807\quizzes_kok.html) opens once a day
-  at 10:00 via a local server at http://127.0.0.1:8765. When a quiz is
-  finished there, it is recorded in
-  %LOCALAPPDATA%\LinkNotifier\driving_tests.json and the task is checked.
-  Tests taken on the GitHub Pages site are NOT detected - use the
-  "Άνοιγμα τεστ" button or the daily auto-open.
-
-All times, work days, the class schedule and the alex151807 folder can be
-changed with the "Ρυθμίσεις" button.
+"Σήμερα" resets every day; past days are kept in the history table
+(60 days). A task you check or uncheck yourself is left alone that day.
 
 
 OBSERVER (tab "Observer")
